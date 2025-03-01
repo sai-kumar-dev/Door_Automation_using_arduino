@@ -1,0 +1,34 @@
+volatile long encoderCount = 0;
+
+        void setup() {
+          Serial.begin(9600);
+          pinMode(2, INPUT_PULLUP);
+          pinMode(3, INPUT_PULLUP);
+          attachInterrupt(digitalPinToInterrupt(2), updateEncoder, CHANGE);
+          attachInterrupt(digitalPinToInterrupt(3), updateEncoder, CHANGE);
+        }
+
+        void loop() {
+          Serial.print("Encoder Count: ");
+          Serial.println(encoderCount);
+          delay(100); // Adjust delay as needed
+        }
+
+        void updateEncoder() {
+          int a = digitalRead(2);
+          int b = digitalRead(3);
+
+          if (a == HIGH) {
+            if (b == LOW) {
+              encoderCount++;
+            } else {
+              encoderCount--;
+            }
+          } else {
+            if (b == HIGH) {
+              encoderCount--;
+            } else {
+              encoderCount++;
+            }
+          }
+        }

@@ -1,0 +1,28 @@
+const int pinA = 4; // Replace with your pin numbers
+        const int pinB = 5;
+
+        int lastStateA = 0;
+        int lastStateB = 0;
+
+        void setup() {
+          pinMode(pinA, INPUT_PULLUP);
+          pinMode(pinB, INPUT_PULLUP);
+          Serial.begin(9600);
+        }
+
+        void loop() {
+          int currentStateA = digitalRead(pinA);
+          int currentStateB = digitalRead(pinB);
+
+          if (currentStateA != lastStateA || currentStateB != lastStateB) {
+            Serial.print("A: ");
+            Serial.print(currentStateA);
+            Serial.print(" B: ");
+            Serial.println(currentStateB);
+
+            lastStateA = currentStateA;
+            lastStateB = currentStateB;
+          }
+
+          delay(10); // Adjust delay as needed
+        }
