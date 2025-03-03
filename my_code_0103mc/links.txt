@@ -1,2 +1,4 @@
 https://chatgpt.com/share/67c30135-1f38-8010-91a3-0e839b0bc872
+ https://automatetheboringstuff.com/
 
+https://docs.python-guide.org/
