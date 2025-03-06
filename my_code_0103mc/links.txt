@@ -15,3 +15,9 @@ abhi
 
 https://chatgpt.com/share/67c921f7-0d08-8010-8a95-fb67e7d4ec94
 pip
+
+
+
+
+https://chatgpt.com/share/67c9b5ab-8310-8010-ac76-4b8f28fe9d4d
+for arduino ide
