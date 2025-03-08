@@ -2,3 +2,13 @@ closing during opening should still be checked
 repeated debug stats happening check it 
 
 any other errors also check it 
+
+
+
+
+
+
+
+
+run this command for packages 
+pip install --no-index --find-links=ai_ml_packages -r requirements.txt
