@@ -1,0 +1,9 @@
+matplotlib
+matplotlib-inline
+numpy
+pandas
+scipy
+tqdm
+types-seaborn
+types-tensorflow
+types-tqdm
