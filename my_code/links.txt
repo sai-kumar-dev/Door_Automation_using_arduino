@@ -21,3 +21,10 @@ pip
 
 https://chatgpt.com/share/67c9b5ab-8310-8010-ac76-4b8f28fe9d4d
 for arduino ide
+
+
+
+
+
+https://dronebotworkshop.com/dc-gearmotors-pwm/
+components 
