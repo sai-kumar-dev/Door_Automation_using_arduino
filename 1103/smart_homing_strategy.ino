@@ -75,41 +75,45 @@ bool performSmartHoming() {
   const int minSafeSpeed = 25;
   int testSpeed = initialSpeed;
   int previousEncoder = encoderCount;
-  int previousTestSpeed = testSpeed;
   unsigned long lastCheck = millis();
-  unsigned long checkInterval = 300; // Check every 300 ms
+  unsigned long checkInterval = 300;
+  unsigned long homingStartTime = millis();
+  const unsigned long homingTimeout = 10000; // 10 seconds
 
   Serial.println("🏠 Starting Smart Homing...");
+  
   while (digitalRead(HOME) != LOW) {
     analogWrite(PWM_PIN, testSpeed);
     digitalWrite(DIR_PIN, HIGH);
 
+    if (millis() - homingStartTime > homingTimeout) {
+      stopMotor();
+      Serial.println("❌ Homing Timeout! Sensor not triggered.");
+      return false; // Failed to home
+    }
+
     if (millis() - lastCheck >= checkInterval) {
       int delta = abs(encoderCount - previousEncoder);
       if (delta < 2 && testSpeed < maxHomingSpeed) {
-        int newSpeed = min(testSpeed + speedStep, maxHomingSpeed);
-        if (newSpeed != testSpeed) {
-          testSpeed = newSpeed;
-          Serial.print("⏫ Increasing Homing Speed to: ");
-          Serial.println(testSpeed);
-        }
+        testSpeed = min(testSpeed + speedStep, maxHomingSpeed);
+        Serial.print("⏫ Increasing Homing Speed to: ");
+        Serial.println(testSpeed);
       } else if (delta >= 2 && testSpeed > minSafeSpeed) {
-        int newSpeed = max(testSpeed - speedStep, minSafeSpeed);
-        if (newSpeed != testSpeed) {
-          testSpeed = newSpeed;
-          Serial.print("⏬ Slowing Homing Speed to: ");
-          Serial.println(testSpeed);
-        }
+        testSpeed = max(testSpeed - speedStep, minSafeSpeed);
+        Serial.print("⏬ Slowing Homing Speed to: ");
+        Serial.println(testSpeed);
       }
       previousEncoder = encoderCount;
       lastCheck = millis();
     }
   }
+
   stopMotor();
   encoderCount = 0;
   Serial.println("✅ Homing Complete. Door is Fully Open.");
   return true;
 }
+
 
 void setup() {
   Serial.begin(9600);
