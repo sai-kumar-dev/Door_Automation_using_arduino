@@ -1,3 +1,4 @@
+Documentation
 ---
 
 # 🧾 **Automatic Door Control System - Documentation**
