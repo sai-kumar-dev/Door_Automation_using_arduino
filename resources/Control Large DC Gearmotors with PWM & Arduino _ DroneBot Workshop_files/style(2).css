@@ -1,0 +1,45 @@
+/*
+Theme Name: DBWS
+Theme URI: https://wordpress-1176893-4120151.cloudwaysapps.com
+Template: spacious
+Author: DroneBot Workshop
+Author URI: https://wordpress-1176893-4120151.cloudwaysapps.com
+Description: Child for Spacious
+Tags: one-column,two-columns,right-sidebar,left-sidebar,flexible-header,custom-header,custom-background,custom-menu,custom-colors,sticky-post,threaded-comments,translation-ready,featured-images,theme-options,footer-widgets,blog,e-commerce,rtl-language-support
+Version: 1.8.3.1677796153
+Updated: 2023-03-02 17:29:13
+
+*/
+.dbwsresourcebox {
+	padding:2px 6px 4px 6px; 
+	color: #555555; 
+	background-color: #e5efff; 
+	border: #dddddd 2px solid
+}
+
+
+
+ div.wpforms-container-full .wpforms-form button[type=submit] {
+
+background-color: #1e73be; /* Blue background color */
+
+color: white; /* Text color */
+
+} 
+
+div.wpforms-container-full .wpforms-form input[type=submit]:hover, 
+div.wpforms-container-full .wpforms-form input[type=submit]:active, 
+div.wpforms-container-full .wpforms-form button[type=submit]:hover, 
+div.wpforms-container-full .wpforms-form button[type=submit]:active, 
+div.wpforms-container-full .wpforms-form .wpforms-page-button:hover, 
+div.wpforms-container-full .wpforms-form .wpforms-page-button:active {
+    background-color: #154360; /* Dark blue background */
+
+}
+
+#menu-item-6217 a{
+color: #0000ff;
+}
+#menu-item-6218 a{
+color: #ff0000;
+}
