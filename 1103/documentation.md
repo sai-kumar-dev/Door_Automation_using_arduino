@@ -1,152 +1,166 @@
-Here’s a complete documentation for your **Automatic Door Control** project, written in a clean, professional style with inline explanations, a use case story, and sample I/O behavior examples.
+---
+
+# 🧾 **Automatic Door Control System - Documentation**
+
+## 📌 Overview
+
+This is a smart **automatic glass door controller** implemented using **Arduino**. It controls a door with:
+- A **DC motor** (for opening/closing),
+- **Quadrature encoder** (for position tracking),
+- **Limit switch** (homing reference),
+- Two push-buttons (**open** and **close**),
+- And PWM-based **speed control** for torque-sensitive smooth movement.
 
 ---
 
-# 📘 Automatic Door Control – Full Documentation
+## 🛠️ **Hardware Interface**
 
-## 🔧 Project Summary
-
-This project controls a **motorized automatic glass door** using an **Arduino Uno**, based on **button input**, **limit detection via encoder count**, and **encoder feedback** for position control. It ensures smooth and safe door movement using **speed modulation**, **directional control**, and **safety mechanisms** like emergency stop and homing.
-
----
-
-## ⚙️ Hardware Setup
-
-### ➕ Components Used
-| Component              | Pin Connections | Purpose                             |
-|------------------------|-----------------|--------------------------------------|
-| DC Motor               | PWM_PIN (9)     | Speed control                        |
-| Direction Control      | DIR_PIN (8)     | Clockwise/Anticlockwise              |
-| Rotary Encoder         | ENCODER_A (3)   | Counts motor steps (interrupt-based) |
-|                        | ENCODER_B (4)   | Direction feedback                   |
-| Open Button            | OPEN_BUTTON (5) | User input to open door              |
-| Close Button           | CLOSE_BUTTON (6)| User input to close door             |
-| Home Sensor (Limit)    | HOME (11)       | Detects full open position           |
+| Pin       | Function                 |
+|-----------|--------------------------|
+| 3         | Encoder A (Interrupt)    |
+| 4         | Encoder B                |
+| 8         | Motor Direction          |
+| 9         | PWM to control Motor     |
+| 5         | Open Button (Input Pullup)|
+| 6         | Close Button (Input Pullup)|
+| 11        | Homing Sensor (Input Pullup)|
 
 ---
 
-## 🧠 Use Case Story
+## 🚦 **System Behavior & Use Case Story**
 
-> **Imagine a modern office with an automatic glass door**. At the start of the day, power is turned on. The system doesn’t know the door’s current position, so it first runs a **Homing Procedure** to fully open the door. After that, it listens for button inputs:
+### 📖 Use Case Story
+
+> Imagine a glass office door. Initially, it's in an unknown position. On powering up, the system performs a **homing routine**: it gently moves the door until it reaches the "fully open" position using the home switch. After homing:
 >
-> - When **Open** is pressed, the door opens unless it’s already fully open.
-> - When **Close** is pressed, the door closes unless it’s already fully closed.
-> - If **both buttons are pressed**, it's considered an emergency — the motor immediately stops.
-> - During motion, the door **slows down near the endpoints** to prevent hitting hard stops or damaging the glass.
-> - At any point, pressing a button while the opposite motion is in progress switches the operation cleanly (once current operation finishes or is stopped).
+> - If someone presses **"Close"**, the door smoothly **accelerates to max speed**, then **decelerates** as it nears full close.
+> - If someone presses **"Open"**, the reverse happens.
+> - **Both buttons pressed together** triggers an **emergency stop** (for safety).
 >
-> Safety features include speed ramping, emergency stops, and encoder feedback-based hard stops. Auto-close is currently disabled during testing.
+> ⚠️ Torque required near closed state is higher, so we use **gradual deceleration** to prevent the motor from stalling or jerking. This protects the **glass** and prevents gear/motor damage.
 
 ---
 
-## 🧩 Core Concepts Explained
+## 💡 Key Features and Choices
 
-### 🚪 Encoder Count
-- `encoderCount` tracks the door’s position.
-- **Open Position**: `encoderCount = 0`
-- **Closed Position**: `encoderCount ≈ 1050`
+### 1. ✅ **Homing Routine**
+- Required because encoder has **no absolute position** on startup.
+- Home switch is mounted to detect fully open position.
+- Encoder is reset to 0 upon reaching home.
 
-### 🏁 Homing
-- At startup, the system performs homing by opening the door until the home sensor is triggered (LOW).
-- Encoder count is reset to 0 once homing completes.
+### 2. 🧠 **Stateful Handling**
+- Boolean flags `isOpening`, `isClosing` ensure **mutual exclusivity**.
+- Prevents multiple simultaneous actions or redundant operations.
 
-### 🧮 Motion Logic
-- Motion starts when user presses the button.
-- Speed is calculated based on the position:
-  - Fast in middle zones.
-  - Slower in near-end positions.
-  - Slight torque boost at end of closing due to friction.
+### 3. 🔁 **Speed Ramping Logic**
 
-### 🛑 Emergency Stop
-- Both buttons pressed at the same time? Motor stops immediately and sets `emergencyStopped = true`.
+**Why Smooth Speed Transition?**
+- DC motors require **torque** to start, especially against friction (like door seals).
+- If speed instantly jumps from 0 to high or high to 0, it can:
+  - Stall the motor,
+  - Damage the door or motor,
+  - Be noisy or unsafe.
 
----
+**Our Solution:**
+- Speed changes **step-by-step** (`speedStep = 3`) toward a target value.
+- Deceleration is **position-aware**, so door slows down **only near the end**.
+- Near full open or full close, speed reduces from `100 ➝ 30` to gently land.
 
-## 🔍 Function Breakdown
+**Analogy:**
+> Like how a train approaches a station—it doesn’t slam the brakes, it slows down gradually based on how far it is.
 
-### `setup()`
-- Initializes serial monitor, pins, and interrupts.
-- Waits for homing on startup.
+### 4. 🛑 **Emergency Stop Logic**
+- Both buttons pressed? That’s not normal.
+- We stop the motor immediately and log the event.
 
-### `loop()`
-Handles:
-- Homing logic
-- Open/Close button handling
-- Emergency stop
-- Speed-controlled motion using encoder
-- Safe deceleration near endpoints
-- Auto-close (currently disabled)
+### 5. ⏳ **Auto-Close (Temporarily Disabled)**
+- After remaining open for a fixed time, door can auto-close.
+- This is currently **commented out** for testing convenience.
 
 ---
 
-## 🧮 Speed Ramping Logic
+## 📐 Constants & Configurations
 
-```cpp
-int calculateSpeed(int position, bool isOpeningDir)
-```
-- Returns PWM value dynamically adjusted:
-  - Fast (180–200) in central zones.
-  - Slow (80) near ends.
-  - Slight boost (200) at the final zone of closing to overcome torque.
-  - Gradual transitions using `speedStep = 5` to smooth motion.
-
----
-
-## 📌 Sample Scenarios
-
-| Scenario                     | System Behavior                                             |
-|-----------------------------|-------------------------------------------------------------|
-| Open button pressed          | Starts opening. Slows down near open end. Stops at 0.       |
-| Close button pressed         | Starts closing. Boosts torque in final 5%. Stops at 1050.   |
-| Open + Close pressed         | Emergency stop. Motor halts instantly.                      |
-| Button pressed repeatedly    | Ignores if already in requested position.                   |
-| Homing at boot               | Opens door slowly until home sensor is triggered.           |
+| Name               | Value  | Purpose                           |
+|--------------------|--------|-----------------------------------|
+| `maxPosition`      | 1050   | Encoder count when fully closed   |
+| `baseCloseDelay`   | 5000   | Auto-close wait time (ms)         |
+| `maxMotionDuration`| 7000   | Safety timeout per motion (ms)    |
+| `minSpeed`         | 30     | Speed near door end               |
+| `maxSpeed`         | 100    | Max door movement speed           |
+| `rampStartZone`    | 150    | When deceleration starts          |
+| `rampThreshold`    | 50     | Where to keep min speed constant  |
 
 ---
 
-## 🧪 Testing Considerations
+## 🧪 Example Scenarios
 
-- **Speed drop near ends** avoids glass door breakage.
-- **Motor torque is increased only slightly** at the end of closing.
-- **Auto-close** is disabled during testing for full manual control.
-- **Real-time safety checks** like emergency stop are active.
-
----
-
-## 🧼 Clean Serial Output Example
-
-```
+### ✅ Homing at Startup
+```bash
 🔌 System Ready. Waiting for Homing...
 ✅ Homing Complete. Door is Fully Open.
+```
+
+### 🔽 Closing Door
+```bash
 🔽 Closing Door...
 🔒 Door Fully Closed.
+```
+
+### 🔼 Opening Door
+```bash
 🔼 Opening Door...
 ✅ Door Fully Opened.
+```
+
+### 🛑 Emergency Stop
+```bash
 🛑 Emergency Stop: Both Buttons Pressed!
 ```
 
 ---
 
-## 🧯 Safety & Edge Cases Handled
+## 🚧 Edge Case Handling
 
-✔️ Homing on startup  
-✔️ Emergency stop  
-✔️ Slowing near ends  
-✔️ Torque boost near end of closing  
-✔️ Prevent movement beyond bounds  
-✔️ Handles invalid button presses  
-✔️ Smooth start/stop with ramping  
-✔️ Auto-close isolated cleanly for testing  
-
----
-
-## ✅ Final Notes
-
-- The code is **hardware-safe**: never pushes glass with excess force.
-- **Modular speed logic** makes it easy to tune later.
-- Can be extended for **automatic sensors**, **wireless control**, or **timed logic**.
-- Robust for real-world deployment.
+| Scenario                            | Handled? | Notes                          |
+|-------------------------------------|----------|--------------------------------|
+| Pressing open when already open     | ✅       | Message shown                  |
+| Pressing close when already closed  | ✅       | Message shown                  |
+| Both buttons pressed                | ✅       | Emergency stop                 |
+| Encoder stuck / motion stalled      | ✅       | Timeout abort after 7s         |
+| Door overshoots encoder count       | ✅       | Liberal use of `<=` and `>=`   |
+| Auto-close needed?                  | ✅(temp off) | Can be re-enabled easily  |
 
 ---
 
-Would you like a PDF version of this documentation? Or shall I help you integrate this into a report/research paper format?
+## 🔍 Why Not Use Fixed Speed?
+
+> In real-world mechanical systems like sliding glass doors, **torque varies with position**.
+- Near end points, friction is high.
+- High speed near end = **glass break risk**.
+- Low speed start = **can’t overcome friction**.
+
+Hence, we chose **gradual acceleration/deceleration** using encoder position feedback.
+
+---
+
+## 🧠 Suggested Improvements (Future Scope)
+- Add buzzer or LED for visual alerts.
+- Add load sensing to detect motor stall.
+- Support for **infrared** or **touchless** activation.
+- EEPROM store for encoder count if homing fails.
+
+---
+
+## 🧾 Summary
+
+This system provides:
+✅ Reliable movement  
+✅ Torque-safe ramping  
+✅ Position-aware motion  
+✅ Safety checks  
+✅ Clean serial feedback for debugging  
+
+Built with real-world physical constraints in mind, this design blends **hardware logic** with **software adaptability**, ensuring safety, reliability, and maintainability.
+
+---
