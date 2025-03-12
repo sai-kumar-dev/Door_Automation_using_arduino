@@ -1,201 +1,207 @@
-// Pin Definitions
-#define DIR_PIN       2
-#define PWM_PIN       3
-#define ENCODER_PIN   4
-#define HOME_SENSOR   5
-#define OPEN_BTN      6
-#define CLOSE_BTN     7
+// Auto Door System - Optimized & Annotated Version
+// Author: You 🧠 | Assistant: ChatGPT 🤖
+// Purpose: Smart door control with encoder-based homing, smooth motor control, and safety logic
 
-// Motor Control
-#define MIN_SPEED     70
-#define MAX_SPEED     200
-#define SPEED_STEP    5
+// ------------ PIN SETUP ------------
+const int dirPin = 8;
+const int pwmPin = 9;
 
-// Encoder Logic
+const int openBtn = ;
+const int closeBtn = 5;
+const int homeSensor = 6;
+
+const int encoderA = 7;
+const int encoderB = 8;
+
+// ------------ CONFIGURATION ------------
+const int minSpeed = 100;
+const int maxSpeed = 255;
+const int speedStep = 5;
+const int autoCloseDelay = 5000;  // Delay before auto-close (ms)
+const int maxPosition = -1000;    // Maximum encoder count for full close
+
+// ------------ STATE VARIABLES ------------
 volatile long encoderCount = 0;
-long maxPosition = -1000; // hypothetical maximum closed position
+int currentSpeed = minSpeed;
+bool isOpening = false;
+bool isClosing = false;
+bool homed = false;
+bool debug = true; // Set to false to hide serial prints
 
-// States
-enum DoorState {HOMING, IDLE, OPENING, CLOSING, STOPPED};
-DoorState doorState = HOMING;
+unsigned long openStartTime = 0;
 
-bool motorRunning = false;
-unsigned long lastMoveTime = 0;
-unsigned long autoCloseDelay = 5000;
-
-// Function declarations
-void setMotor(bool direction, int speed);
-void stopMotor(String reason);
-void updateMotorSpeed();
-void printDebug();
-bool isHomeSensorTriggered();
-bool isButtonPressed(int pin);
-
-// Encoder ISR (simple simulation)
-void encoderISR() {
-  if (digitalRead(DIR_PIN) == HIGH) {
-    encoderCount++;
-  } else {
-    encoderCount--;
-  }
-}
-
+// ------------ SETUP ------------
 void setup() {
   Serial.begin(9600);
-
-  pinMode(DIR_PIN, OUTPUT);
-  pinMode(PWM_PIN, OUTPUT);
-  pinMode(HOME_SENSOR, INPUT_PULLUP);
-  pinMode(OPEN_BTN, INPUT_PULLUP);
-  pinMode(CLOSE_BTN, INPUT_PULLUP);
-  pinMode(ENCODER_PIN, INPUT);
-
-  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), encoderISR, CHANGE);
   
-  Serial.println("System Initializing...");
+  pinMode(dirPin, OUTPUT);
+  pinMode(pwmPin, OUTPUT);
 
-  // Start homing
-  setMotor(true, MIN_SPEED);
-  doorState = HOMING;
+  pinMode(openBtn, INPUT_PULLUP);
+  pinMode(closeBtn, INPUT_PULLUP);
+  pinMode(homeSensor, INPUT_PULLUP);
+
+  pinMode(encoderA, INPUT);
+  pinMode(encoderB, INPUT);
+
+  attachInterrupt(digitalPinToInterrupt(encoderA), updateEncoder, CHANGE);
+
+  if (debug) Serial.println("System Initializing...");
+
+  startHoming(); // Begin with door opening
 }
 
+// ------------ LOOP ------------
 void loop() {
-  printDebug();
+  if (!homed) return;  // Ignore button input until homing complete
 
-  switch (doorState) {
-    case HOMING:
-      if (isHomeSensorTriggered()) {
-        encoderCount = 0;
-        stopMotor("Homed");
-        delay(1000);
-        doorState = IDLE;
-        lastMoveTime = millis();
-      }
-      break;
+  showStatus(); // Always show encoder & speed
 
-    case IDLE:
-      if (millis() - lastMoveTime > autoCloseDelay) {
-        Serial.println("Auto-closing after delay");
-        doorState = CLOSING;
-        setMotor(false, MIN_SPEED);
-      } else {
-        if (isButtonPressed(OPEN_BTN)) {
-          Serial.println("Opening requested");
-          if (encoderCount >= 0) Serial.println("Already open!");
-          else {
-            doorState = OPENING;
-            setMotor(true, MIN_SPEED);
-          }
-        }
-        if (isButtonPressed(CLOSE_BTN)) {
-          Serial.println("Closing requested");
-          doorState = CLOSING;
-          setMotor(false, MIN_SPEED);
-        }
-      }
-      break;
+  // --- Button Checks ---
+  if (digitalRead(openBtn) == LOW) handleOpenButton();
+  else if (digitalRead(closeBtn) == LOW) handleCloseButton();
 
-    case OPENING:
-      updateMotorSpeed();
-      if (isHomeSensorTriggered()) {
-        stopMotor("Fully Opened");
-        doorState = IDLE;
-        lastMoveTime = millis();
-      }
-      else if (isButtonPressed(CLOSE_BTN)) {
-        stopMotor("Emergency Stop during Opening");
-        doorState = STOPPED;
-      }
-      break;
-
-    case CLOSING:
-      updateMotorSpeed();
-      if (encoderCount <= maxPosition) {
-        stopMotor("Fully Closed");
-        doorState = IDLE;
-        lastMoveTime = millis();
-      }
-      else if (isButtonPressed(OPEN_BTN)) {
-        stopMotor("Stop & Open during Closing");
-        delay(300);
-        doorState = OPENING;
-        setMotor(true, MIN_SPEED);
-      }
-      else if (isButtonPressed(CLOSE_BTN)) {
-        Serial.println("Already closing!");
-      }
-      break;
-
-    case STOPPED:
-      if (isButtonPressed(OPEN_BTN)) {
-        Serial.println("Resuming Opening...");
-        doorState = OPENING;
-        setMotor(true, MIN_SPEED);
-      }
-      if (isButtonPressed(CLOSE_BTN)) {
-        Serial.println("Resuming Closing...");
-        doorState = CLOSING;
-        setMotor(false, MIN_SPEED);
-      }
-      break;
+  // --- Auto-Close Logic ---
+  if (openStartTime > 0 && millis() - openStartTime >= autoCloseDelay) {
+    if (debug) Serial.println("Auto-closing after timeout...");
+    startClosing();
+    openStartTime = 0;
   }
 
-  delay(50);  // reduce clutter
-}
-
-//============================//
-//         FUNCTIONS          //
-//============================//
-
-void setMotor(bool direction, int speed) {
-  digitalWrite(DIR_PIN, direction);
-  analogWrite(PWM_PIN, speed);
-  motorRunning = true;
-}
-
-void stopMotor(String reason) {
-  analogWrite(PWM_PIN, 0);
-  motorRunning = false;
-  Serial.println("Motor Stopped: " + reason);
-}
-
-bool isHomeSensorTriggered() {
-  return digitalRead(HOME_SENSOR) == LOW;
-}
-
-bool isButtonPressed(int pin) {
-  return digitalRead(pin) == LOW;
-}
-
-void updateMotorSpeed() {
-  static int currentSpeed = MIN_SPEED;
-  static long lastEncoder = encoderCount;
-  static unsigned long lastUpdate = millis();
-
-  if (!motorRunning) return;
-
-  // No movement? Bump speed
-  if (encoderCount == lastEncoder && currentSpeed < MAX_SPEED) {
-    currentSpeed += SPEED_STEP;
-    setMotor(digitalRead(DIR_PIN), currentSpeed);
-  }
-  // Approaching target? Slow down
-  else if (encoderCount != lastEncoder && currentSpeed > MIN_SPEED) {
-    currentSpeed -= SPEED_STEP;
-    setMotor(digitalRead(DIR_PIN), currentSpeed);
+  // --- Smooth Speed Control during Opening ---
+  if (isOpening) {
+    if (digitalRead(homeSensor) == LOW || encoderCount >= 0) {
+      stopMotor();
+      if (debug) Serial.println("Door fully opened. Home position reached.");
+      encoderCount = 0;
+      openStartTime = millis(); // Start auto-close timer
+      isOpening = false;
+    } else {
+      smoothDrive();
+    }
   }
 
-  lastEncoder = encoderCount;
-  lastUpdate = millis();
+  // --- Smooth Speed Control during Closing ---
+  if (isClosing) {
+    if (encoderCount <= maxPosition) {
+      stopMotor();
+      if (debug) Serial.println("Door fully closed.");
+      isClosing = false;
+    } else {
+      smoothDrive();
+    }
+  }
+
+  delay(20);
 }
 
-void printDebug() {
-  static unsigned long lastDebugTime = 0;
-  if (millis() - lastDebugTime > 250) {
+// ------------ ENCODER ISR ------------
+void updateEncoder() {
+  int b = digitalRead(encoderB);
+  if (b == HIGH) encoderCount++;
+  else encoderCount--;
+}
+
+// ------------ HOMING FUNCTION ------------
+void startHoming() {
+  if (debug) Serial.println("Homing in progress...");
+  digitalWrite(dirPin, HIGH); // Open direction
+  analogWrite(pwmPin, minSpeed);
+  currentSpeed = minSpeed;
+  isOpening = true;
+
+  while (digitalRead(homeSensor) != LOW) {
+    smoothDrive();
+    showStatus();
+    delay(20);
+  }
+
+  stopMotor();
+  encoderCount = 0;
+  homed = true;
+  isOpening = false;
+
+  if (debug) Serial.println("Homing complete.");
+  delay(autoCloseDelay); // wait before auto-closing
+  startClosing();
+}
+
+// ------------ BUTTON HANDLERS ------------
+void handleOpenButton() {
+  if (encoderCount >= 0) {
+    if (debug) Serial.println("Door is already open.");
+    return;
+  }
+
+  if (isClosing) {
+    if (debug) Serial.println("Emergency stop during closing!");
+    stopMotor();
+    startOpening();
+    return;
+  }
+
+  if (!isOpening) {
+    if (debug) Serial.println("Manual open requested.");
+    startOpening();
+  }
+}
+
+void handleCloseButton() {
+  if (encoderCount <= maxPosition) {
+    if (debug) Serial.println("Door is already closed.");
+    return;
+  }
+
+  if (isOpening) {
+    if (debug) Serial.println("Emergency stop during opening!");
+    stopMotor();
+    return;
+  }
+
+  if (!isClosing) {
+    if (debug) Serial.println("Manual close requested.");
+    startClosing();
+  }
+}
+
+// ------------ OPEN/CLOSE STARTERS ------------
+void startOpening() {
+  digitalWrite(dirPin, HIGH);
+  analogWrite(pwmPin, minSpeed);
+  currentSpeed = minSpeed;
+  isOpening = true;
+  openStartTime = 0;
+}
+
+void startClosing() {
+  digitalWrite(dirPin, LOW);
+  analogWrite(pwmPin, minSpeed);
+  currentSpeed = minSpeed;
+  isClosing = true;
+}
+
+// ------------ MOTOR CONTROL ------------
+void stopMotor() {
+  analogWrite(pwmPin, 0);
+  currentSpeed = minSpeed;
+  isOpening = false;
+  isClosing = false;
+}
+
+void smoothDrive() {
+  // Gradually ramp up speed if door is stuck
+  if (currentSpeed < maxSpeed) currentSpeed += speedStep;
+  else currentSpeed = maxSpeed;
+
+  analogWrite(pwmPin, currentSpeed);
+}
+
+// ------------ DEBUG STATUS DISPLAY ------------
+void showStatus() {
+  if (debug) {
     Serial.print("Encoder: ");
     Serial.print(encoderCount);
     Serial.print(" | Speed: ");
-    Serial.println(motorRunning ? analogRead(PWM_PIN) : 0);
-    lastDebugTime = millis();
+    Serial.println(currentSpeed);
   }
 }
