@@ -6,19 +6,19 @@
 const int dirPin = 8;
 const int pwmPin = 9;
 
-const int openBtn = ;
-const int closeBtn = 5;
-const int homeSensor = 6;
+const int openBtn = 5;
+const int closeBtn = 6;
+const int homeSensor = 11;
 
-const int encoderA = 7;
-const int encoderB = 8;
+const int encoderA = 3;
+const int encoderB = 4;
 
 // ------------ CONFIGURATION ------------
-const int minSpeed = 100;
-const int maxSpeed = 255;
+const int minSpeed = 80;
+const int maxSpeed = 120;
 const int speedStep = 5;
 const int autoCloseDelay = 5000;  // Delay before auto-close (ms)
-const int maxPosition = -1000;    // Maximum encoder count for full close
+const int maxPosition = -1020;    // Maximum encoder count for full close
 
 // ------------ STATE VARIABLES ------------
 volatile long encoderCount = 0;
@@ -45,6 +45,8 @@ void setup() {
   pinMode(encoderB, INPUT);
 
   attachInterrupt(digitalPinToInterrupt(encoderA), updateEncoder, CHANGE);
+
+  delay(5000); // delay of 5 seconds to avoid rushing and preventing unwanted movement
 
   if (debug) Serial.println("System Initializing...");
 
