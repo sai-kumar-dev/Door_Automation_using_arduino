@@ -1,3 +1,4 @@
+Smart Homing Doc
 ---
 
 # 🛠️ Automatic Door Control System – Documentation
