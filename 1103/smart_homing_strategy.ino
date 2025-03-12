@@ -22,6 +22,8 @@ unsigned long motionStartTime = 0;
 const unsigned long maxMotionDuration = 7000; // 7 seconds timeout safety
 
 int currentSpeed = 0;
+bool lastOpenState = HIGH;
+bool lastCloseState = HIGH;
 
 void encoderISR() {
   if (digitalRead(ENCODER_A) > digitalRead(ENCODER_B)) {
@@ -72,8 +74,8 @@ bool performSmartHoming() {
   const int speedStep = 10;
   const int minSafeSpeed = 25;
   int testSpeed = initialSpeed;
-
   int previousEncoder = encoderCount;
+  int previousTestSpeed = testSpeed;
   unsigned long lastCheck = millis();
   unsigned long checkInterval = 300; // Check every 300 ms
 
@@ -85,13 +87,19 @@ bool performSmartHoming() {
     if (millis() - lastCheck >= checkInterval) {
       int delta = abs(encoderCount - previousEncoder);
       if (delta < 2 && testSpeed < maxHomingSpeed) {
-        testSpeed = min(testSpeed + speedStep, maxHomingSpeed);
-        Serial.print("⏫ Increasing Homing Speed to: ");
-        Serial.println(testSpeed);
+        int newSpeed = min(testSpeed + speedStep, maxHomingSpeed);
+        if (newSpeed != testSpeed) {
+          testSpeed = newSpeed;
+          Serial.print("⏫ Increasing Homing Speed to: ");
+          Serial.println(testSpeed);
+        }
       } else if (delta >= 2 && testSpeed > minSafeSpeed) {
-        testSpeed = max(testSpeed - speedStep, minSafeSpeed);
-        Serial.print("⏬ Slowing Homing Speed to: ");
-        Serial.println(testSpeed);
+        int newSpeed = max(testSpeed - speedStep, minSafeSpeed);
+        if (newSpeed != testSpeed) {
+          testSpeed = newSpeed;
+          Serial.print("⏬ Slowing Homing Speed to: ");
+          Serial.println(testSpeed);
+        }
       }
       previousEncoder = encoderCount;
       lastCheck = millis();
@@ -118,14 +126,23 @@ void setup() {
 }
 
 void loop() {
+  bool currentOpenState = digitalRead(OPEN_BUTTON);
+  bool currentCloseState = digitalRead(CLOSE_BUTTON);
+
+  bool openJustPressed = (lastOpenState == HIGH && currentOpenState == LOW);
+  bool closeJustPressed = (lastCloseState == HIGH && currentCloseState == LOW);
+
+  lastOpenState = currentOpenState;
+  lastCloseState = currentCloseState;
+
   if (!homed) {
     homed = performSmartHoming();
     closeStartTime = millis();
     return;
   }
 
-  bool openPressed = digitalRead(OPEN_BUTTON) == LOW;
-  bool closePressed = digitalRead(CLOSE_BUTTON) == LOW;
+  bool openPressed = currentOpenState == LOW;
+  bool closePressed = currentCloseState == LOW;
 
   if ((isOpening || isClosing) && openPressed && closePressed) {
     stopMotor();
@@ -136,7 +153,7 @@ void loop() {
     return;
   }
 
-  if (openPressed && !isOpening && !isClosing) {
+  if (openJustPressed && !isOpening && !isClosing) {
     if (encoderCount <= 0) {
       Serial.println("ℹ️ Door is already open.");
     } else {
@@ -146,7 +163,7 @@ void loop() {
     }
   }
 
-  if (closePressed && !isOpening && !isClosing) {
+  if (closeJustPressed && !isOpening && !isClosing) {
     if (encoderCount >= maxPosition) {
       Serial.println("ℹ️ Door is already closed.");
     } else {
