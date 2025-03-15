@@ -1,7 +1,5 @@
 https://chatgpt.com/share/67d4e681-5df4-8010-99b6-f65af35a6338
 
-
-
 https://1drv.ms/u/c/15bdd0c448fbab1f/ES0SYDdULplDhZPsQEFCUkwB4XbZ6OIMf93mlCtu9rWjkw?e=ZscXY8
 
 pip install --no-index --find-links=packages numpy pandas matplotlib seaborn scikit-learn scipy opencv-python xgboost lightgbm
