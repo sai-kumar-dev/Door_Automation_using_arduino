@@ -1,5 +1,3 @@
-#include <Arduino.h>
-
 // Pin Definitions
 #define ENCODER_A 3
 #define ENCODER_B 4
@@ -7,7 +5,7 @@
 #define PWM_PIN 9
 #define OPEN_BUTTON 5
 #define CLOSE_BUTTON 6
-#define PIR_SENSOR 7
+#define PIR_SENSOR 12
 #define HOME_SENSOR 11
 
 // Encoder and Motor Parameters
