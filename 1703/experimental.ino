@@ -100,13 +100,9 @@ void loop() {
   }
 }
 
+// === Encoder ISR ===
 void updateEncoder() {
-  int a = digitalRead(ENCODER_A);
-  int b = digitalRead(ENCODER_B);
-  if (a == b)
-    encoderCount++;
-  else
-    encoderCount--;
+  encoderCount += (digitalRead(ENCODER_B) < digitalRead(ENCODER_A)) ? 1 : -1;
 }
 
 void moveMotor(bool dir, int speed) {
