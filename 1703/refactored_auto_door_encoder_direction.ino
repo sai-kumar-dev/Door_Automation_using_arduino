@@ -1,169 +1,194 @@
+// === Pin Definitions ===
+#define ENCODER_A 3
+#define ENCODER_B 4
+#define HOME_SENSOR 11
+#define OPEN_BTN 5
+#define CLOSE_BTN 6
+#define DIR_PIN 8
+#define PWM_PIN 9
+#define PIR_SENSOR 12
 
-/*
- * Arduino-Based Automatic Glass Door System
- * Refactored for encoder direction:
- * - Closing: 0 -> 1000
- * - Opening: 1000 -> 0
- */
+// === Motor Speed Constants ===
+#define MAX_SPEED 180
+#define MIN_SPEED 40
+#define SPEED_CHECK_INTERVAL 100
+#define AUTO_CLOSE_DELAY 3000  // 3 seconds
 
-// ----------------- Pin Definitions -----------------
-const int pwmPin       = 9;
-const int dirPin       = 8;
-const int encoderA     = 3;
-const int encoderB     = 4;
-const int openBtnPin   = 5;
-const int closeBtnPin  = 6;
-const int pirPin       = 7;
-const int homeSensor   = 11;
+// === Position Constants ===
+#define MAX_POSITION 1000
 
-// ----------------- Control Constants -----------------
-const int OPEN_POSITION     = 0;
-const int CLOSED_POSITION   = 1000;
-const int MAX_SPEED         = 255;
-const int MIN_SPEED         = 100;
-const unsigned long debounceDelay = 50;
-const unsigned long autoCloseDelay = 3000;
+// === Debounce
+#define DEBOUNCE_TIME 200
 
-// ----------------- Variables -----------------
+// === Global State Variables ===
 volatile long encoderCount = 0;
-bool homingDone = false;
+long lastEncoderCheck = 0;
+bool isHomed = false;
 bool isOpening = false;
 bool isClosing = false;
-unsigned long lastMotionTime = 0;
-unsigned long lastOpenPressTime = 0;
-unsigned long lastClosePressTime = 0;
-bool autoCloseInitiated = false;
-unsigned long autoCloseStartTime = 0;
-long targetPosition = CLOSED_POSITION;
+bool pirTriggered = false;
+unsigned long lastOpenTime = 0;
 
-// ----------------- Setup -----------------
+unsigned long lastButtonPress = 0;
+long lastEncoderPosition = 0;
+
+// === Setup ===
 void setup() {
-  pinMode(pwmPin, OUTPUT);
-  pinMode(dirPin, OUTPUT);
-  pinMode(openBtnPin, INPUT_PULLUP);
-  pinMode(closeBtnPin, INPUT_PULLUP);
-  pinMode(pirPin, INPUT);
-  pinMode(homeSensor, INPUT_PULLUP);
+  pinMode(ENCODER_A, INPUT);
+  pinMode(ENCODER_B, INPUT);
+  pinMode(HOME_SENSOR, INPUT_PULLUP);
+  pinMode(OPEN_BTN, INPUT_PULLUP);
+  pinMode(CLOSE_BTN, INPUT_PULLUP);
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(PWM_PIN, OUTPUT);
+  pinMode(PIR_SENSOR, INPUT_PULLUP);
 
-  attachInterrupt(digitalPinToInterrupt(encoderA), updateEncoder, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(encoderB), updateEncoder, CHANGE);
-
-  Serial.begin(9600);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_A), updateEncoder, RISING);
+  Serial.begin(115200);
+  delay(3000);
+  Serial.println("System Booted. Starting Homing...");
+  homeDoor();
 }
 
-// ----------------- Loop -----------------
+// === Main Loop ===
 void loop() {
-  if (!homingDone) {
-    performHoming();
-    return;
-  }
+  if (!isHomed) return;
 
-  handleButtons();
-  handlePIR();
-  handleMovement();
+  checkButtons();
   handleAutoClose();
 
-  Serial.print("Encoder: ");
-  Serial.println(encoderCount);
+  delay(10); // Loop stabilization
 }
 
-// ----------------- Encoder Update -----------------
+// === Encoder ISR ===
 void updateEncoder() {
-  int A = digitalRead(encoderA);
-  int B = digitalRead(encoderB);
-  if (A == B) encoderCount++;
-  else encoderCount--;
+  encoderCount += (digitalRead(ENCODER_B) > digitalRead(ENCODER_A)) ? 1 : -1;
 }
 
-// ----------------- Homing -----------------
-void performHoming() {
-  digitalWrite(dirPin, HIGH); // Open direction
-  analogWrite(pwmPin, 130); // Slow speed
+// === Homing Logic ===
+void homeDoor() {
+  int speed = 100;
+  digitalWrite(DIR_PIN, LOW); // Closing
+  analogWrite(PWM_PIN, speed);
 
-  if (digitalRead(homeSensor) == LOW) {
-    analogWrite(pwmPin, 0);
-    encoderCount = OPEN_POSITION;
-    homingDone = true;
-    autoCloseStartTime = millis();
-    autoCloseInitiated = true;
+  while (digitalRead(HOME_SENSOR) == HIGH) {
+    Serial.print("Homing... Encoder: ");
+    Serial.println(encoderCount);
+    delay(100);
+  }
+
+  analogWrite(PWM_PIN, 0);
+  encoderCount = 0;
+  isHomed = true;
+  Serial.println("Homing Complete.");
+}
+
+// === Handle Button Presses ===
+void checkButtons() {
+  if (millis() - lastButtonPress < DEBOUNCE_TIME) return;
+
+  if (digitalRead(OPEN_BTN) == LOW) {
+    lastButtonPress = millis();
+    handleOpen();
+  }
+  else if (digitalRead(CLOSE_BTN) == LOW) {
+    lastButtonPress = millis();
+    handleClose();
+  }
+  else if (digitalRead(PIR_SENSOR) == LOW && !pirTriggered) {
+    pirTriggered = true;
+    handleOpen();
+  }
+  else if (digitalRead(PIR_SENSOR) == HIGH) {
+    pirTriggered = false;
   }
 }
 
-// ----------------- Handle Button Inputs -----------------
-void handleButtons() {
-  if (millis() - lastOpenPressTime > debounceDelay && digitalRead(openBtnPin) == LOW) {
-    lastOpenPressTime = millis();
-    if (!isOpening && encoderCount < CLOSED_POSITION) {
-      startOpening();
-    }
-  }
-  if (millis() - lastClosePressTime > debounceDelay && digitalRead(closeBtnPin) == LOW) {
-    lastClosePressTime = millis();
-    if (!isClosing && encoderCount > OPEN_POSITION) {
-      startClosing();
-    }
-  }
-}
+// === Handle Door Open ===
+void handleOpen() {
+  if (isOpening || encoderCount <= 0) return;
 
-// ----------------- PIR Sensor -----------------
-void handlePIR() {
-  if (digitalRead(pirPin) == HIGH) {
-    lastMotionTime = millis();
-    if (!isOpening && encoderCount > OPEN_POSITION) {
-      startOpening();
-    }
-  }
-}
-
-// ----------------- Start Movements -----------------
-void startOpening() {
+  Serial.println("[ACTION] Opening Door...");
   isOpening = true;
   isClosing = false;
-  digitalWrite(dirPin, HIGH); // OPEN direction
-  targetPosition = OPEN_POSITION;
-  autoCloseInitiated = false;
+  moveDoor(HIGH, 0);
+  lastOpenTime = millis();
 }
 
-void startClosing() {
+// === Handle Door Close ===
+void handleClose() {
+  if (isClosing || encoderCount >= MAX_POSITION) return;
+
+  Serial.println("[ACTION] Closing Door...");
   isClosing = true;
   isOpening = false;
-  digitalWrite(dirPin, LOW); // CLOSE direction
-  targetPosition = CLOSED_POSITION;
+  moveDoor(LOW, MAX_POSITION);
 }
 
-// ----------------- Movement Handling -----------------
-void handleMovement() {
-  if (isOpening || isClosing) {
-    long distanceToTarget = abs(targetPosition - encoderCount);
-    long totalDistance = abs(CLOSED_POSITION - OPEN_POSITION);
-    long brakingDistance = 0.6 * totalDistance;
+// === Move Door with Exponential Speed Profile ===
+void moveDoor(bool direction, int target) {
+  digitalWrite(DIR_PIN, direction);
+  int speed;
+  unsigned long startTime = millis();
 
-    int speed = MAX_SPEED;
-    if (distanceToTarget < brakingDistance) {
-      float ratio = float(distanceToTarget) / brakingDistance;
-      speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * pow(ratio, 2); // Exponential decay
-      if (speed < MIN_SPEED) speed = MIN_SPEED;
+  while ((direction == HIGH && encoderCount > target) ||
+         (direction == LOW && encoderCount < target)) {
+
+    long distTotal = abs(encoderCount - target);
+    float brakeStartDist = 0.6 * MAX_POSITION;
+    float normalized = constrain((float)distTotal / brakeStartDist, 0.0, 1.0);
+    speed = (int)(MIN_SPEED + (MAX_SPEED - MIN_SPEED) * pow(normalized, 2.5));
+
+    analogWrite(PWM_PIN, speed);
+
+    Serial.print("[ENC] Encoder: ");
+    Serial.print(encoderCount);
+    Serial.print(" | Speed: ");
+    Serial.println(speed);
+
+    // Emergency reverse
+    if (direction == HIGH && digitalRead(CLOSE_BTN) == LOW) {
+      emergencyStop();
+      handleClose();
+      return;
+    }
+    if (direction == LOW && (digitalRead(OPEN_BTN) == LOW || digitalRead(PIR_SENSOR) == LOW)) {
+      emergencyStop();
+      handleOpen();
+      return;
     }
 
-    analogWrite(pwmPin, speed);
-
-    if ((isOpening && encoderCount <= OPEN_POSITION) ||
-        (isClosing && encoderCount >= CLOSED_POSITION)) {
-      analogWrite(pwmPin, 0);
-      isOpening = false;
-      isClosing = false;
-      autoCloseStartTime = millis();
-      autoCloseInitiated = true;
+    // Encoder stuck recovery
+    if (millis() - lastEncoderCheck > SPEED_CHECK_INTERVAL) {
+      if (abs(encoderCount - lastEncoderPosition) < 2) {
+        analogWrite(PWM_PIN, MAX_SPEED);
+        Serial.println("[WARN] Encoder Stuck. Boosting Speed.");
+      }
+      lastEncoderCheck = millis();
+      lastEncoderPosition = encoderCount;
     }
+
+    delay(50);
   }
+
+  analogWrite(PWM_PIN, 0);
+  isOpening = false;
+  isClosing = false;
+  Serial.println("[DONE] Movement Complete");
 }
 
-// ----------------- Auto Close -----------------
+// === Emergency Stop ===
+void emergencyStop() {
+  analogWrite(PWM_PIN, 0);
+  delay(200);
+  Serial.println("EMERGENCY STOP");
+}
+
+// === Auto Close Logic ===
 void handleAutoClose() {
-  if (autoCloseInitiated && (millis() - autoCloseStartTime >= autoCloseDelay)) {
-    if (!isClosing && encoderCount > OPEN_POSITION) {
-      startClosing();
-    }
-    autoCloseInitiated = false;
+  if (!isOpening && !isClosing &&
+      encoderCount <= 10 &&  // Fully open
+      millis() - lastOpenTime > AUTO_CLOSE_DELAY) {
+    handleClose();
   }
 }
