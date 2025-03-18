@@ -131,14 +131,6 @@ void handleClose() {
   moveDoor(LOW, MAX_POSITION);
 }
 
-int dist(int d, int a, int b){
-  if(d == 0){
-    return abs(a);
-  }else{
-    return a - b;
-  }
-}
-
 // === General Motor Movement with S-curve Logic ===
 void moveDoor(bool direction,  int target) {
     digitalWrite(DIR_PIN, direction); // Set motor direction
@@ -153,9 +145,9 @@ void moveDoor(bool direction,  int target) {
       if (digitalRead(HOME_SENSOR) == LOW && direction == HIGH){
         break;
       }
-      int distanceToSlowdown = dist(direction, encoderCount, target);
-        speed = map(distanceToSlowdown, MAX_POSITION, 0, MAX_SPEED, MIN_SPEED);
-        speed = constrain(speed, MIN_SPEED, MAX_SPEED);
+      int distanceToTarget = abs(encoderCount - target);
+      speed = map(distanceToTarget, 0, abs(MAX_POSITION), MIN_SPEED, MAX_SPEED);
+
      
   
       analogWrite(PWM_PIN, speed); // Apply dynamic speed
