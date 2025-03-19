@@ -1,220 +1,302 @@
+/*
+ * Smart Door Controller with Enhanced Safety Features
+ * Final Version 3.1
+ */
+
 #include <EEPROM.h>
 
-// ------------------- Constants -------------------
+// ========== HARDWARE CONFIG ==========
+#define DIR_PIN         8
+#define PWM_PIN         9
+#define ENCODER_A       3
+#define ENCODER_B       4
+#define HOME_SENSOR     11
+#define PIR_SENSOR      12
+#define OPEN_BTN        5
+#define CLOSE_BTN       6
 
-#define DIR_PIN 8
-#define PWM_PIN 9
-#define ENCODER_A 3
-#define ENCODER_B 4
+// ========== DEBUG CONFIG ==========
+#define DEBUG           true
+#define SERIAL_BAUD     9600
 
-#define OPEN_BTN 5
-#define CLOSE_BTN 6
-#define HOME_SENSOR 11
-#define PIR_SENSOR 7
+// ========== PARAMETERS ==========
+#define MAX_SPEED       180
+#define MIN_SPEED       50
+#define AUTO_CLOSE_DELAY 5000UL
+#define DEBOUNCE_DELAY  200UL
+#define MAX_MOVE_TIME   8000UL
+#define POS_SAVE_INTERVAL 300000UL
+#define STUCK_TIMEOUT   1000UL
+#define STUCK_TOLERANCE 3
+#define SAFETY_MARGIN   50
+#define HOMING_INTERVAL 86400000UL
 
-#define DOOR_OPEN_POS 1000
-#define DOOR_CLOSE_POS 0
-#define DOOR_SPEED 255
-
-#define ACCEL_STEP 10
-#define AUTO_CLOSE_DELAY 5000
-#define POS_SAVE_INTERVAL 300000 // 5 minutes
-
-// ------------------- Variables -------------------
-
+// ========== STATE VARIABLES ==========
 volatile long encoderCount = 0;
-int currentSpeed = 0;
-int targetSpeed = 0;
-bool dir = true;
-
-enum DoorState { IDLE, OPENING, CLOSING, HOMING };
-DoorState doorState = HOMING;
+long openPosition = 0;
+long closedPosition = -1050;
+bool isHomed = false;
 
 unsigned long autoCloseTimer = 0;
 unsigned long positionSaveTimer = 0;
-long lastSavedCount = 0;
+unsigned long lastHomingTime = 0;
+unsigned long moveStartTime = 0;
 
-// ------------------- Encoder ISR -------------------
+enum DoorState { IDLE, OPENING, CLOSING, HOMING, STOPPED };
+DoorState doorState = HOMING;
 
-void encoderISR() {
+// ========== STRUCT ==========
+struct PersistentData {
+  long openPos;
+  long closedPos;
+  bool calibrated;
+};
+
+// ========== DEBUG FUNCTION ==========
+void debugPrint(String msg) {
+  if (DEBUG) Serial.println(msg);
+}
+
+// ========== ENCODER ISR ==========
+void updateEncoder() {
   static uint8_t lastState = 0;
-  uint8_t newState = digitalRead(ENCODER_A) | (digitalRead(ENCODER_B) << 1); // 🔧 FIXED
-  int8_t delta = 0;
-
-  switch (lastState) {
-    case 0: if (newState == 1) delta = +1; else if (newState == 2) delta = -1; break;
-    case 1: if (newState == 3) delta = +1; else if (newState == 0) delta = -1; break;
-    case 3: if (newState == 2) delta = +1; else if (newState == 1) delta = -1; break;
-    case 2: if (newState == 0) delta = +1; else if (newState == 3) delta = -1; break;
-  }
-
-  encoderCount += delta;
+  uint8_t newState = digitalRead(ENCODER_A) | (digitalRead(ENCODER_B) << 1);
+  if (newState == lastState) return;
+  const int8_t transitions[] = {0,1,-1,0,-1,0,0,1,1,0,0,-1,0,-1,1,0};
+  encoderCount += transitions[(lastState << 2) | newState];
   lastState = newState;
 }
 
-// ------------------- Debug Print -------------------
-
-void debugPrint(String msg) {
-  Serial.println("[DEBUG] " + msg);
+// ========== EEPROM ==========
+void savePosition() {
+  PersistentData data = {openPosition, closedPosition, true};
+  EEPROM.put(0, data);
+  debugPrint("[EEPROM] Position saved");
 }
 
-// ------------------- Emergency Stop -------------------
+void loadPosition() {
+  PersistentData data;
+  EEPROM.get(0, data);
+  if (data.calibrated) {
+    openPosition = data.openPos;
+    closedPosition = data.closedPos;
+    encoderCount = openPosition;
+    debugPrint("[EEPROM] Loaded saved position");
+  } else {
+    debugPrint("[EEPROM] No calibration data found");
+  }
+}
 
-void emergencyStop() {
-  currentSpeed = 0;
-  targetSpeed = 0;
+// ========== MOTOR CONTROL ==========
+void stopMotor() {
   analogWrite(PWM_PIN, 0);
-  debugPrint("Emergency stop activated!");
+  debugPrint("[MOTOR] STOP");
 }
 
-// ------------------- Motor Control -------------------
-
-void moveMotor(bool direction, int speed) {
-  digitalWrite(DIR_PIN, direction);
-  analogWrite(PWM_PIN, speed);
+void setPwmFrequency() {
+  TCCR1B = (TCCR1B & 0b11111000) | 0x05;  // 31.25Hz
 }
 
-// ------------------- Check for Motor Stuck -------------------
+// ========== SAFETY ==========
+void emergencyStop() {
+  stopMotor();
+  doorState = STOPPED;
+  savePosition();
+  debugPrint("[SAFETY] Emergency Stop Triggered!");
+}
 
-bool isStuck(long *lastPos, unsigned long *lastChange) {
-  if (millis() - *lastChange > 2000) {
-    if (abs(encoderCount - *lastPos) < 5) {
-      return true;
-    } else {
-      *lastPos = encoderCount;
-      *lastChange = millis();
+void checkSoftwareEndstops() {
+  if (encoderCount > openPosition + SAFETY_MARGIN || encoderCount < closedPosition - SAFETY_MARGIN) {
+    debugPrint("[SAFETY] Software endstop breach");
+    emergencyStop();
+  }
+}
+
+// ========== HOMING ==========
+void homeDoor() {
+  debugPrint("[HOMING] Starting...");
+  doorState = HOMING;
+  digitalWrite(DIR_PIN, HIGH);
+  analogWrite(PWM_PIN, 100);
+  unsigned long startTime = millis();
+
+  while (digitalRead(HOME_SENSOR) == HIGH) {
+    if (millis() - startTime > 5000) {
+      debugPrint("[ERROR] Homing Timeout");
+      emergencyStop();
+      return;
     }
+    if (checkButton(OPEN_BTN)) {
+      debugPrint("[HOMING] Aborted by User");
+      emergencyStop();
+      return;
+    }
+    delay(10);
+  }
+
+  stopMotor();
+  encoderCount = openPosition;
+  isHomed = true;
+  doorState = IDLE;
+  lastHomingTime = millis();
+  debugPrint("[HOMING] Completed");
+}
+
+// ========== CALIBRATION ==========
+void enterCalibration() {
+  debugPrint("[CALIB] Mode Activated");
+
+  debugPrint("[CALIB] Move to OPEN pos & hold Open button");
+  while (digitalRead(OPEN_BTN) == HIGH) {
+    digitalWrite(DIR_PIN, HIGH);
+    analogWrite(PWM_PIN, 100);
+    delay(10);
+  }
+  stopMotor();
+  openPosition = encoderCount;
+
+  debugPrint("[CALIB] Move to CLOSED pos & hold Close button");
+  while (digitalRead(CLOSE_BTN) == HIGH) {
+    digitalWrite(DIR_PIN, LOW);
+    analogWrite(PWM_PIN, 100);
+    delay(10);
+  }
+  stopMotor();
+  closedPosition = encoderCount;
+
+  savePosition();
+  debugPrint("[CALIB] Complete");
+}
+
+// ========== BUTTON DEBOUNCE ==========
+bool checkButton(int pin) {
+  static unsigned long lastPress[14] = {0};
+  if (digitalRead(pin) == LOW && millis() - lastPress[pin] > DEBOUNCE_DELAY) {
+    lastPress[pin] = millis();
+    return true;
   }
   return false;
 }
 
-// ------------------- Setup -------------------
-
-void setup() {
-  Serial.begin(9600);
-
-  pinMode(DIR_PIN, OUTPUT);
-  pinMode(PWM_PIN, OUTPUT);
-
-  pinMode(ENCODER_A, INPUT);
-  pinMode(ENCODER_B, INPUT);
-
-  pinMode(OPEN_BTN, INPUT_PULLUP);
-  pinMode(CLOSE_BTN, INPUT_PULLUP);
-  pinMode(HOME_SENSOR, INPUT_PULLUP);
-  pinMode(PIR_SENSOR, INPUT);
-
-  attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_B), encoderISR, CHANGE);
-
-  encoderCount = EEPROM.get(0, encoderCount);
-  lastSavedCount = encoderCount;
-
-  debugPrint("System Initialized");
+// ========== STUCK DETECTION ==========
+bool isStuck(long* lastPos, unsigned long* lastChange) {
+  if (abs(encoderCount - *lastPos) > STUCK_TOLERANCE) {
+    *lastPos = encoderCount;
+    *lastChange = millis();
+    return false;
+  }
+  return (millis() - *lastChange) > STUCK_TIMEOUT;
 }
 
-// ------------------- Main Loop -------------------
+// ========== MOVEMENT ==========
+void moveDoor(bool direction, long target) {
+  digitalWrite(DIR_PIN, direction);
+  moveStartTime = millis();
+  long startPos = encoderCount;
+  long lastPos = encoderCount;
+  unsigned long lastChange = millis();
 
-void loop() {
-  static long lastPos = encoderCount;
-  static unsigned long lastChange = millis();
+  while (millis() - moveStartTime < MAX_MOVE_TIME) {
+    if ((direction == HIGH && encoderCount >= target) ||
+        (direction == LOW && encoderCount <= target)) break;
 
-  // -------- HOMING LOGIC --------
-  if (doorState == HOMING) {
-    moveMotor(true, DOOR_SPEED);
-    if (digitalRead(HOME_SENSOR) == LOW) {
+    long remaining = abs(target - encoderCount);
+    int speed = map(remaining, 0, abs(target - startPos), MIN_SPEED, MAX_SPEED);
+    analogWrite(PWM_PIN, constrain(speed, MIN_SPEED, MAX_SPEED));
+
+    if (isStuck(&lastPos, &lastChange)) {
+      debugPrint("[ERROR] Motor Stuck");
       emergencyStop();
-      encoderCount = 0;
-      EEPROM.put(0, encoderCount);
-      lastSavedCount = 0;
-      debugPrint("Homed! Encoder = 0");
-      doorState = IDLE;
-      autoCloseTimer = millis();
+      return;
     }
-    return;
+
+    checkSoftwareEndstops();
+    delay(10);
   }
 
-  // -------- BUTTON CONTROLS --------
-  if (doorState == IDLE) {
-    if (digitalRead(OPEN_BTN) == LOW) {
-      doorState = OPENING;
-      autoCloseTimer = millis(); // reset timer
-    } else if (digitalRead(CLOSE_BTN) == LOW) {
-      doorState = CLOSING;
-    }
-  }
+  stopMotor();
+  debugPrint("[MOVE] Door Reached Target");
+}
 
-  // Emergency Stop During Motion
-  if (doorState == OPENING && digitalRead(CLOSE_BTN) == LOW) {
-    emergencyStop();
-    doorState = IDLE;
-    return;
-  }
-
-  if (doorState == CLOSING && digitalRead(OPEN_BTN) == LOW) {
-    emergencyStop();
-    doorState = OPENING;
-    return;
-  }
-
-  // -------- PIR SENSOR --------
-  if (digitalRead(PIR_SENSOR) == LOW && doorState == IDLE) {
+// ========== STATE HANDLING ==========
+void handleIdleState() {
+  if (checkButton(OPEN_BTN) || digitalRead(PIR_SENSOR) == LOW) {
+    debugPrint("[STATE] Opening...");
     doorState = OPENING;
     autoCloseTimer = millis();
   }
+  else if (checkButton(CLOSE_BTN)) {
+    debugPrint("[STATE] Closing...");
+    doorState = CLOSING;
+  }
+  else if (millis() - autoCloseTimer > AUTO_CLOSE_DELAY) {
+    debugPrint("[AUTO] Closing after delay");
+    doorState = CLOSING;
+  }
+}
 
-  // -------- DOOR ACTION --------
+void handleMovement() {
   if (doorState == OPENING) {
-    dir = true;
-    targetSpeed = DOOR_SPEED;
-    if (encoderCount >= DOOR_OPEN_POS) {
-      emergencyStop();
-      doorState = IDLE;
-      autoCloseTimer = millis();
-    }
-  } else if (doorState == CLOSING) {
-    dir = false;
-    targetSpeed = DOOR_SPEED;
-    if (encoderCount <= DOOR_CLOSE_POS) {
-      emergencyStop();
-      doorState = IDLE;
-    }
-  } else {
-    targetSpeed = 0;
-  }
-
-  // -------- STUCK CHECK --------
-  if (doorState != IDLE && isStuck(&lastPos, &lastChange)) {
-    debugPrint("⚠️ Motor stuck detected!");
-    emergencyStop();
+    moveDoor(HIGH, openPosition);
     doorState = IDLE;
-    // Optional: Add alert system here
-    return;
+    autoCloseTimer = millis();
+  } else if (doorState == CLOSING) {
+    moveDoor(LOW, closedPosition);
+    doorState = IDLE;
+  }
+}
+
+void handleStoppedState() {
+  if (checkButton(OPEN_BTN) || checkButton(CLOSE_BTN)) {
+    debugPrint("[SYSTEM] Resuming from STOP");
+    doorState = IDLE;
+  }
+}
+
+// ========== SETUP ==========
+void setup() {
+  Serial.begin(SERIAL_BAUD);
+  setPwmFrequency();
+
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(PWM_PIN, OUTPUT);
+  pinMode(ENCODER_A, INPUT_PULLUP);
+  pinMode(ENCODER_B, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_A), updateEncoder, CHANGE);
+
+  pinMode(HOME_SENSOR, INPUT_PULLUP);
+  pinMode(PIR_SENSOR, INPUT_PULLUP);
+  pinMode(OPEN_BTN, INPUT_PULLUP);
+  pinMode(CLOSE_BTN, INPUT_PULLUP);
+
+  if (digitalRead(OPEN_BTN) == LOW && digitalRead(CLOSE_BTN) == LOW) {
+    enterCalibration();
   }
 
-  // -------- ACCEL / DECEL --------
-  if (currentSpeed < targetSpeed) currentSpeed += ACCEL_STEP;
-  else if (currentSpeed > targetSpeed) currentSpeed -= ACCEL_STEP;
+  loadPosition();
+  homeDoor();
+}
 
-  currentSpeed = constrain(currentSpeed, 0, 255);
-  moveMotor(dir, currentSpeed);
+// ========== LOOP ==========
+void loop() {
+  static unsigned long lastMaintenance = 0;
 
-  // -------- AUTO CLOSE --------
-  if (doorState == IDLE && encoderCount >= DOOR_OPEN_POS) {
-    if (millis() - autoCloseTimer > AUTO_CLOSE_DELAY) {
-      doorState = CLOSING;
+  if (millis() - lastMaintenance > 60000) {
+    lastMaintenance = millis();
+    if (millis() - positionSaveTimer > POS_SAVE_INTERVAL) {
+      savePosition();
+      positionSaveTimer = millis();
+    }
+    if (millis() - lastHomingTime > HOMING_INTERVAL) {
+      debugPrint("[MAINT] Rehoming recommended");
     }
   }
 
-  // -------- EEPROM SAVE --------
-  if (millis() - positionSaveTimer > POS_SAVE_INTERVAL) {
-    if (abs(encoderCount - lastSavedCount) > 5) { // Save only if changed
-      EEPROM.put(0, encoderCount);
-      lastSavedCount = encoderCount;
-      debugPrint("Position saved to EEPROM: " + String(encoderCount));
-    }
-    positionSaveTimer = millis();
+  switch (doorState) {
+    case IDLE:    handleIdleState(); break;
+    case OPENING:
+    case CLOSING: handleMovement(); break;
+    case STOPPED: handleStoppedState(); break;
+    case HOMING:  break; // Already handled
   }
-
-  delay(10); // Consider replacing with non-blocking loop later
 }
