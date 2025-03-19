@@ -1,4 +1,3 @@
-
 // === Motor & Encoder Pins ===
 #define DIR_PIN     8
 #define PWM_PIN     9
@@ -16,38 +15,21 @@
 #define MIN_SPEED   40
 
 // === Encoder Positions ===
-#define CLOSED_POSITION -1050  // fully closed position
-#define OPEN_POSITION    0     // fully open
-
-// === State Flags ===
-bool isOpening = false;
-bool isClosing = false;
-bool isHomed = false;
-bool motionDetected = false;
+#define CLOSED_POSITION -1050  // Fully closed
+#define OPEN_POSITION     0    // Fully open
 
 // === Encoder Count ===
 volatile long encoderCount = 0;
 
-// === Auto-Close Timer ===
+// === Timers ===
 unsigned long autoCloseStartTime = 0;
 const unsigned long AUTO_CLOSE_DELAY = 5000;
-
-// === Debounce Timers ===
 unsigned long lastButtonPressTime = 0;
 const unsigned long DEBOUNCE_DELAY = 250;
 
 // === States ===
 enum DoorState { IDLE, OPENING, CLOSING, HOMING, STOPPED };
 DoorState currentState = HOMING;
-
-// === Function Declarations ===
-void moveDoor(bool direction, long targetPosition);
-void stopMotor();
-void resetAutoCloseTimer();
-bool debounceButton(int pin);
-void homeDoor();
-void handleOpen();
-void handleClose();
 
 // === Encoder ISR ===
 void updateEncoder() {
@@ -56,6 +38,7 @@ void updateEncoder() {
   encoderCount += (a > b) ? -1 : 1;
 }
 
+// === Setup ===
 void setup() {
   Serial.begin(9600);
 
@@ -74,12 +57,13 @@ void setup() {
   pinMode(OPEN_BTN, INPUT_PULLUP);
   pinMode(CLOSE_BTN, INPUT_PULLUP);
 
-  // Start with homing
+  // Begin with homing
   homeDoor();
 }
 
+// === Main Loop ===
 void loop() {
-  if (!isHomed) return;
+  if (currentState == HOMING) return;
 
   switch (currentState) {
     case IDLE:
@@ -108,6 +92,7 @@ void loop() {
         Serial.println("[EMERGENCY] Open pressed while closing");
         stopMotor();
         handleOpen();
+        resetAutoCloseTimer();
       }
       break;
 
@@ -121,16 +106,16 @@ void loop() {
       }
       break;
 
-    case HOMING:
-      // Do nothing
+    default:
       break;
   }
 }
 
+// === Homing Function ===
 void homeDoor() {
   Serial.println("[INIT] Homing...");
 
-  digitalWrite(DIR_PIN, HIGH);
+  digitalWrite(DIR_PIN, HIGH);  // Open direction
   analogWrite(PWM_PIN, 100);
 
   unsigned long start = millis();
@@ -138,6 +123,7 @@ void homeDoor() {
     if (millis() - start > 5000) {
       Serial.println("[ERROR] Homing timeout!");
       stopMotor();
+      currentState = STOPPED;
       return;
     }
     delay(50);
@@ -145,34 +131,41 @@ void homeDoor() {
 
   stopMotor();
   encoderCount = 0;
-  isHomed = true;
   currentState = IDLE;
   Serial.println("[INFO] Homing complete");
 }
 
+// === Handle Open ===
 void handleOpen() {
-  if (isOpening || encoderCount >= OPEN_POSITION) return;
+  if (currentState == OPENING || encoderCount >= OPEN_POSITION) return;
+
+  Serial.println("[ACTION] Opening...");
   currentState = OPENING;
   moveDoor(HIGH, OPEN_POSITION);
   stopMotor();
-  encoderCount = 0; // Reset encoder after full open
+  encoderCount = 0; // Reset after full open
   currentState = IDLE;
 }
 
+// === Handle Close ===
 void handleClose() {
-  if (isClosing || encoderCount <= CLOSED_POSITION) return;
+  if (currentState == CLOSING || encoderCount <= CLOSED_POSITION) return;
+
+  Serial.println("[ACTION] Closing...");
   currentState = CLOSING;
   moveDoor(LOW, CLOSED_POSITION);
   stopMotor();
   currentState = IDLE;
 }
 
+// === Door Movement ===
 void moveDoor(bool direction, long target) {
   digitalWrite(DIR_PIN, direction);
   long distance = abs(target - encoderCount);
 
   while (true) {
     long currentDist = abs(target - encoderCount);
+
     if ((direction == HIGH && digitalRead(HOME_SENSOR) == LOW) ||
         (direction == LOW && encoderCount <= target)) {
       break;
@@ -186,17 +179,18 @@ void moveDoor(bool direction, long target) {
   }
 }
 
+// === Stop Motor ===
 void stopMotor() {
   analogWrite(PWM_PIN, 0);
-  isOpening = false;
-  isClosing = false;
   Serial.println("[MOTOR] Stopped");
 }
 
+// === Auto-Close Timer Reset ===
 void resetAutoCloseTimer() {
   autoCloseStartTime = millis();
 }
 
+// === Debounce Logic ===
 bool debounceButton(int pin) {
   if (digitalRead(pin) == LOW && (millis() - lastButtonPressTime > DEBOUNCE_DELAY)) {
     lastButtonPressTime = millis();
