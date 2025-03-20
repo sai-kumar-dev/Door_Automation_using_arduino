@@ -47,31 +47,33 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
   Serial.println("=== System Booted ===");
-  homeDoor();
+  
+  homeDoor(); // Home on startup
 }
 
 // === Main Loop ===
 void loop() {
   if (!isHomed) return;
 
-  // PIR Handling
+  // PIR-based auto open & timer reset
   if (digitalRead(PIR_SENSOR) == LOW && !motionDetected) {
     Serial.println("[PIR] Motion detected.");
     motionDetected = true;
     lastMotionTime = millis();
-    handleOpen();
+    handleOpen(); // Will reset timer even if already open
   } else if (motionDetected && millis() - lastMotionTime >= PIR_RESET_DELAY && digitalRead(PIR_SENSOR) == HIGH) {
     Serial.println("[PIR] Motion ended.");
     motionDetected = false;
   }
 
-  // Button Handling
+  // Manual open/close buttons
   if (digitalRead(OPEN_BTN) == LOW) {
     handleOpen();
   } else if (digitalRead(CLOSE_BTN) == LOW) {
     handleClose();
   }
 
+  // Auto close logic
   handleAutoClose();
 }
 
@@ -82,8 +84,9 @@ void updateEncoder() {
 
 // === Homing Logic ===
 void homeDoor() {
+  int sp = 100;
   digitalWrite(DIR_PIN, HIGH);  // Open direction
-  analogWrite(PWM_PIN, 100);
+  analogWrite(PWM_PIN, sp);
   Serial.println("[HOMING] Moving to home sensor...");
 
   while (digitalRead(HOME_SENSOR) == HIGH) {
@@ -93,14 +96,13 @@ void homeDoor() {
   analogWrite(PWM_PIN, 0);
   encoderCount = 0;
   isHomed = true;
-
   Serial.println("[HOMING] Complete. Encoder reset to 0.");
   Serial.println("========================================");
 
-  // Start auto-close countdown immediately after homing (door is now fully open)
+  // Start auto-close timer
   waitingToAutoClose = true;
-  autoCloseStartTime = millis();
-  Serial.println("[AUTO] Started auto-close countdown after homing.");
+  autoCloseStartTime = millis();  
+  Serial.println("Started counting for auto close........");
 }
 
 // === Open Logic ===
@@ -112,32 +114,23 @@ void handleOpen() {
     return;
   }
 
+  // Door is already open
   if (encoderCount >= 0 || digitalRead(HOME_SENSOR) == LOW) {
-    // Door is already open
-    encoderCount = 0;
-    Serial.println("[INFO] Door is already open. Resetting auto-close timer.");
-    waitingToAutoClose = true;
-    autoCloseStartTime = millis();
-    return;
-  }
-
-  // If door is closing, interrupt it and reopen
-  if (isClosing) {
-    Serial.println("[INTERRUPT] Opening requested during closing. Reversing...");
-    emergencyStop();
+    Serial.println("[INFO] Door already open. Resetting auto-close timer.");
   }
 
   Serial.println("[ACTION] Opening door...");
   isOpening = true;
   isClosing = false;
 
-  moveDoor(HIGH, 0);  // Move toward home sensor (encoder 0)
+  moveDoor(HIGH, -10);  // Move towards encoder 0
   encoderCount = 0;
 
+  // Reset auto-close timer
   waitingToAutoClose = true;
-  autoCloseStartTime = millis();
   motionDetected = false;
-  Serial.println("[AUTO] Auto-close timer reset after open.");
+  autoCloseStartTime = millis();
+  Serial.println("Started counting for auto close........");
 }
 
 // === Close Logic ===
@@ -149,14 +142,8 @@ void handleClose() {
     return;
   }
 
-  if (isOpening) {
-    // Ignore close command during opening
-    Serial.println("[INFO] Ignored close request during opening.");
-    return;
-  }
-
   if (encoderCount <= MAX_POSITION) {
-    Serial.println("[INFO] Door is already closed.");
+    Serial.println("[INFO] Door already closed.");
     return;
   }
 
@@ -164,7 +151,7 @@ void handleClose() {
   isClosing = true;
   isOpening = false;
 
-  moveDoor(LOW, MAX_POSITION);
+  moveDoor(LOW, MAX_POSITION); // Move toward MAX_POSITION
 }
 
 // === Move Door ===
@@ -176,12 +163,11 @@ void moveDoor(bool direction, int target) {
   Serial.print("[MOVING] ");
   Serial.println(direction == HIGH ? "Opening..." : "Closing...");
 
-  while ((direction == HIGH && digitalRead(HOME_SENSOR) == HIGH) ||
-         (direction == LOW && encoderCount > target)) {
-
-    // Break if home sensor is triggered during open
+  while ((direction == HIGH && digitalRead(HOME_SENSOR) == HIGH) || (direction == LOW && encoderCount > target)) {
+    // Stop if open direction and home sensor is triggered
     if (direction == HIGH && digitalRead(HOME_SENSOR) == LOW) break;
 
+    // Adjust speed based on distance
     int distanceToTarget = abs(encoderCount - target);
     speed = map(distanceToTarget, 0, abs(MAX_POSITION), MIN_SPEED, MAX_SPEED);
     speed = constrain(speed, MIN_SPEED, MAX_SPEED);
@@ -192,15 +178,20 @@ void moveDoor(bool direction, int target) {
     Serial.print(" | Speed: ");
     Serial.println(speed);
 
-    // Interrupt during close: Open button or PIR detected
-    if (direction == LOW && (digitalRead(OPEN_BTN) == LOW || digitalRead(PIR_SENSOR) == LOW)) {
-      Serial.println("[INTERRUPT] Open triggered during closing.");
+    // Emergency open during closing
+    if ((direction == LOW && digitalRead(OPEN_BTN) == LOW) || digitalRead(PIR_SENSOR) == LOW) {
+      Serial.println("[EMERGENCY] Close interrupted by Open.");
       emergencyStop();
-      handleOpen();
+      handleOpen(); // Will reset timer
       return;
     }
 
-    delay(10);  // avoid watchdog timer trip
+    // Ignore close during opening
+    if (direction == HIGH && digitalRead(CLOSE_BTN) == LOW) {
+      Serial.println("[INFO] Close ignored during opening.");
+    }
+
+    delay(10);
   }
 
   analogWrite(PWM_PIN, 0);
@@ -217,19 +208,19 @@ void emergencyStop() {
   Serial.println("[EMERGENCY] Motor stopped.");
 }
 
-// === Auto-Close Logic ===
+// === Auto-Close Handler ===
 void handleAutoClose() {
   if (!waitingToAutoClose || isOpening || isClosing) return;
 
   if (motionDetected) {
-    // Reset timer if motion still going
-    autoCloseStartTime = millis();
+    autoCloseStartTime = millis(); // Reset timer on motion
+    Serial.println("[AUTO] Motion still detected. Timer reset.");
     return;
   }
 
   if (millis() - autoCloseStartTime >= AUTO_CLOSE_DELAY) {
-    Serial.println("[AUTO] Auto-close timer expired. Closing door...");
-    waitingToAutoClose = false;
+    Serial.println("[AUTO] Auto-closing triggered.");
     handleClose();
+    waitingToAutoClose = false;
   }
 }
