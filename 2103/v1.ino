@@ -26,6 +26,7 @@ bool isOpening = false;
 bool isClosing = false;
 
 bool waitingToAutoClose = false;
+bool waitingForPIRToClear = false;  // ✅ New variable added
 unsigned long autoCloseStartTime = 0;
 unsigned long lastMotionTime = 0;
 
@@ -47,7 +48,7 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
   Serial.println("=== System Booted ===");
-  
+
   homeDoor(); // Home on startup
 }
 
@@ -99,10 +100,9 @@ void homeDoor() {
   Serial.println("[HOMING] Complete. Encoder reset to 0.");
   Serial.println("========================================");
 
-  // Start auto-close timer
   waitingToAutoClose = true;
-  autoCloseStartTime = millis();  
-  Serial.println("Started counting for auto close........");
+  waitingForPIRToClear = true;  // ✅ Wait for PIR to clear before starting timer
+  Serial.println("Waiting for PIR to clear to start auto-close timer...");
 }
 
 // === Open Logic ===
@@ -126,16 +126,21 @@ void handleOpen() {
   moveDoor(HIGH, -10);  // Move towards encoder 0
   encoderCount = 0;
 
-  // Reset auto-close timer
+  // Reset auto-close states
   waitingToAutoClose = true;
+  waitingForPIRToClear = true;  // ✅ Always wait for PIR to go HIGH after open
   motionDetected = false;
-  autoCloseStartTime = millis();
-  Serial.println("Started counting for auto close........");
+  Serial.println("Waiting for PIR to clear to start auto-close timer...");
 }
 
 // === Close Logic ===
 void handleClose() {
   if (!isHomed) return;
+
+  if(isOpening){
+    Serial.println("[CLOSE] Ignored - Door is opening");
+    return;
+  }
 
   if (isClosing) {
     Serial.println("[INFO] Door is already closing.");
@@ -164,10 +169,8 @@ void moveDoor(bool direction, int target) {
   Serial.println(direction == HIGH ? "Opening..." : "Closing...");
 
   while ((direction == HIGH && digitalRead(HOME_SENSOR) == HIGH) || (direction == LOW && encoderCount > target)) {
-    // Stop if open direction and home sensor is triggered
     if (direction == HIGH && digitalRead(HOME_SENSOR) == LOW) break;
 
-    // Adjust speed based on distance
     int distanceToTarget = abs(encoderCount - target);
     speed = map(distanceToTarget, 0, abs(MAX_POSITION), MIN_SPEED, MAX_SPEED);
     speed = constrain(speed, MIN_SPEED, MAX_SPEED);
@@ -178,15 +181,13 @@ void moveDoor(bool direction, int target) {
     Serial.print(" | Speed: ");
     Serial.println(speed);
 
-    // Emergency open during closing
     if ((direction == LOW && digitalRead(OPEN_BTN) == LOW) || digitalRead(PIR_SENSOR) == LOW) {
       Serial.println("[EMERGENCY] Close interrupted by Open.");
       emergencyStop();
-      handleOpen(); // Will reset timer
+      handleOpen();
       return;
     }
 
-    // Ignore close during opening
     if (direction == HIGH && digitalRead(CLOSE_BTN) == LOW) {
       Serial.println("[INFO] Close ignored during opening.");
     }
@@ -212,9 +213,18 @@ void emergencyStop() {
 void handleAutoClose() {
   if (!waitingToAutoClose || isOpening || isClosing) return;
 
+  if (waitingForPIRToClear) {
+    if (digitalRead(PIR_SENSOR) == HIGH) {
+      Serial.println("[AUTO] PIR clear. Starting auto-close timer...");
+      autoCloseStartTime = millis();
+      waitingForPIRToClear = false;
+    } else {
+      return; // Still motion — wait
+    }
+  }
+
   if (motionDetected) {
-    autoCloseStartTime = millis(); // Reset timer on motion
-    Serial.println("[AUTO] Motion still detected. Timer reset.");
+    waitingForPIRToClear = true;
     return;
   }
 
